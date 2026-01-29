@@ -71,7 +71,7 @@ export class Worker {
 
     try {
       this.queryHandle = query({
-        prompt: `You are a worker agent for the "${this.state.repoName}" repository at ${this.state.repoPath}. You have skyeyes MCP tools for interacting with live browser pages. Use skyeyes_eval to execute JS, terminal_exec to run shell commands, terminal_read to see terminal output, terminal_status to check if the terminal is busy, skyeyes_reload to reload a page, and skyeyes_status to check bridge connections. Pages available: "shiro" and "foam". Await instructions.`,
+        prompt: `You are a worker agent for the "${this.state.repoName}" repository at ${this.state.repoPath}. You have skyeyes MCP tools (prefixed with mcp__skyeyes__) for interacting with live browser pages. Available tools: mcp__skyeyes__skyeyes_eval, mcp__skyeyes__terminal_exec, mcp__skyeyes__terminal_read, mcp__skyeyes__terminal_status, mcp__skyeyes__skyeyes_reload, mcp__skyeyes__skyeyes_status. Your dedicated page IDs are: "shiro-${this.state.id}" (your shiro iframe) and "foam-${this.state.id}" (your foam iframe). Always use these page IDs — they are your isolated browser contexts that no other worker shares. Await instructions.`,
         options: {
           cwd: this.state.repoPath,
           model: this.model,
@@ -197,8 +197,12 @@ export class Worker {
           if (message.total_cost_usd) this.state.costUsd += message.total_cost_usd;
           if (message.num_turns) this.state.turnsCompleted += message.num_turns;
           if (message.result) this.addLog("result", message.result);
+        } else if (message.subtype === "error_max_turns") {
+          this.addLog("system", `Reached max turns (${message.num_turns || "?"})`);
+          if (message.total_cost_usd) this.state.costUsd += message.total_cost_usd;
+          if (message.num_turns) this.state.turnsCompleted += message.num_turns;
         } else {
-          const errMsg = message.error || "Unknown error";
+          const errMsg = message.error || message.subtype || "Unknown error";
           this.state.lastError = errMsg;
           this.addLog("error", errMsg);
         }

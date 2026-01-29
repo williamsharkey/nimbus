@@ -84,6 +84,20 @@ All repos live under `~/Desktop/nimbus-land/`:
 - **FluffyCoreutils** (williamsharkey/fluffycoreutils): Shared Unix commands for browser OSes
 - **Skyeyes** (williamsharkey/skyeyes): Browser-side WebSocket bridge for remote JS execution
 
+## MCP Tools (Skyeyes Integration)
+
+**IMPORTANT**: MCP tools DO NOT appear in the tool list but ARE callable. This is how MCP tools work in the Agent SDK.
+
+Available skyeyes MCP tools (prefix: `mcp__skyeyes__`):
+- `mcp__skyeyes__skyeyes_status` - Check which bridges are connected
+- `mcp__skyeyes__skyeyes_eval` - Execute arbitrary JS in browser page
+- `mcp__skyeyes__skyeyes_reload` - Reload a browser iframe
+- `mcp__skyeyes__terminal_exec` - Run shell commands in browser OS terminal
+- `mcp__skyeyes__terminal_read` - Read terminal screen content
+- `mcp__skyeyes__terminal_status` - Check busy state, cwd, OS type
+
+**Usage**: Call these tools directly - they will NOT show up when listing available tools. Each worker has dedicated page IDs: `shiro-{workername}` and `foam-{workername}`.
+
 ## Key Design Decisions
 
 - **Workers use `bypassPermissions`** for autonomous operation

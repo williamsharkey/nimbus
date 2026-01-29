@@ -65,45 +65,52 @@ Or update package.json:
 ## 🟡 Medium Priority Issues
 
 ### 2. Git Clone Functionality Broken in Browser OSes
-**Priority:** MEDIUM (HIGH)
-**Status:** ✅ INVESTIGATED - SOLUTIONS PROPOSED - UPSTREAM ISSUES COMMENTED
+**Priority:** ~~MEDIUM (HIGH)~~ **RESOLVED** ✅
+**Status:** ✅ FIXED IN UPSTREAM - BOTH REPOS UPDATED
 
-**Problem:**
-- Both Shiro and Foam browser terminals cannot successfully clone git repositories
-- Documented in `TESTING_WITH_SKYEYES.md` (lines 92-133, 168-189)
+**Problem:** (RESOLVED)
+- Both Shiro and Foam browser terminals could not successfully clone git repositories
 - Error: `fatal: ENOENT: no such file or directory, stat '/home/user/shiro/.git/config'`
 
-**Root Cause:**
+**Root Cause:** (IDENTIFIED)
 - isomorphic-git calls `fs.stat()` to check if files exist before creating them
-- Both VFS implementations throw ENOENT instead of returning gracefully
-- Simple fix: Modify error structure or add `exists()` method
+- Both VFS implementations threw ENOENT instead of handling gracefully
+
+**Resolution:**
+
+**Shiro Fix** (commit `bbac1d7`, Jan 29 2026):
+- Added `errno` property to filesystem errors for isomorphic-git compatibility
+- ENOENT: -2, EISDIR: -21, ENOTDIR: -20, EEXIST: -17
+- File: `src/filesystem.ts`
+
+**Foam Fix** (commit `ea2e8cd`, Jan 29 2026):
+- Pre-creates `.git` directory before calling `git.clone()`
+- Added shallow clone support (`singleBranch: true`, `depth: 1`)
+- Fixed target directory path resolution
+- File: `src/devtools.js`
 
 **Upstream Issues:**
-- https://github.com/williamsharkey/shiro/issues/14 ✅ Commented with solution
-- https://github.com/williamsharkey/foam/issues/12 ✅ Commented with solution
+- https://github.com/williamsharkey/shiro/issues/14 ✅ Fixed
+- https://github.com/williamsharkey/foam/issues/12 ✅ Fixed
 
-**Impact:**
-- Phase 2 of roadmap blocked (Self-Bootstrapping Workers)
-- Workers cannot clone their own repositories
-- Cannot test autonomous worker capabilities
-- Core vision of self-replicating agents is blocked
+**Impact:** (NOW UNBLOCKED)
+- ✅ Phase 2 of roadmap can proceed (Self-Bootstrapping Workers)
+- ✅ Workers can now clone their own repositories
+- ✅ Autonomous worker capabilities ready for testing
+- ✅ Core vision of self-replicating agents is unblocked
 
 **Detailed Documentation:**
-- 📄 **`GIT_CLONE_INVESTIGATION.md`** - Full root cause analysis, 4 proposed solutions
-- 📄 **`GIT_PROXY_WORKAROUND.md`** - Immediate workaround via server-side proxy
-
-**Current Workaround:**
-✅ **Available** - Server-side git proxy (can implement in 1-2 days)
-- Server clones repo using real git
-- Transfers files to worker VFS via WebSocket
-- Unblocks Phase 2 while upstream fixes are developed
+- 📄 **`GIT_CLONE_INVESTIGATION.md`** - Full root cause analysis (historical reference)
+- 📄 **`GIT_PROXY_WORKAROUND.md`** - Server-side proxy alternative (if needed)
+- 📄 **`GIT_CLONE_STATUS_SUMMARY.md`** - Investigation summary (historical reference)
 
 **Next Steps:**
 1. ✅ Investigate root cause
 2. ✅ Propose solutions to upstream repos
-3. ⏳ Wait for upstream PR review or implement locally
-4. 🔲 Consider implementing proxy workaround in parallel
-5. 🔲 Test fixes via Nimbus skyeyes infrastructure
+3. ✅ Upstream fixes implemented and committed
+4. 🔲 Test fixes via Nimbus skyeyes infrastructure
+5. 🔲 Close this issue after successful validation
+6. 🔲 Proceed with Phase 2 development
 
 ---
 
@@ -201,11 +208,14 @@ interface WorkerCapabilities {
 ### Blocking Issues: 1
 - Missing build script
 
-### Phase 2 Blockers: 1
-- Git clone broken in browser OSes (upstream)
+### Phase 2 Blockers: 0
+- ~~Git clone broken in browser OSes~~ ✅ FIXED (Jan 29, 2026)
 
 ### Integration Issues: 1
 - MCP skyeyes tools unclear integration status
+
+### Resolved Issues: 1
+- ✅ Git clone functionality (Shiro commit `bbac1d7`, Foam commit `ea2e8cd`)
 
 ### Planned Features: 3
 - Worker workspaces
