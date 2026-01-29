@@ -1,0 +1,25 @@
+{
+  "name": "nimbus",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Multi-repo Claude Code orchestrator with live testing dashboard",
+  "scripts": {
+    "dev": "tsx watch src/server/index.ts",
+    "build": "tsc && node scripts/build-client.js",
+    "start": "node dist/server/index.js",
+    "setup": "bash scripts/setup.sh",
+    "build:client": "esbuild src/client/app.ts --bundle --outfile=src/client/app.js --format=esm --target=es2022"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.23",
+    "express": "^4.21.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/ws": "^8.5.0",
+    "esbuild": "^0.24.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}

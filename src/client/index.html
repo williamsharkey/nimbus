@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Nimbus Dashboard</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>nimbus</h1>
+    <div id="orchestrator-bar">
+      <textarea id="orchestrator-msg" placeholder="Broadcast to all workers..." rows="1"></textarea>
+      <button class="btn" onclick="broadcastMessage()">Broadcast</button>
+    </div>
+    <div id="connection-status" title="Disconnected"></div>
+  </header>
+
+  <div id="priorities-section"></div>
+
+  <div id="worker-grid"></div>
+
+  <div id="live-section">
+    <h2>Live Pages</h2>
+    <div id="live-grid"></div>
+  </div>
+
+  <div id="tv-section"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

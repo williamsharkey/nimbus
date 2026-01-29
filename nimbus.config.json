@@ -1,0 +1,16 @@
+{
+  "port": 7777,
+  "basePath": "~/Desktop/nimbus-land",
+  "defaultModel": "claude-sonnet-4-5-20250929",
+  "maxBudgetPerWorkerUsd": 5.0,
+  "maxLogEntries": 500,
+  "repos": [
+    { "name": "shiro", "githubUser": "williamsharkey", "liveUrl": "https://williamsharkey.github.io/shiro/" },
+    { "name": "foam", "githubUser": "williamsharkey", "liveUrl": "https://williamsharkey.github.io/foam/" },
+    { "name": "windwalker", "githubUser": "williamsharkey" },
+    { "name": "spirit", "githubUser": "williamsharkey" },
+    { "name": "fluffycoreutils", "githubUser": "williamsharkey" },
+    { "name": "nimbus", "githubUser": "williamsharkey" },
+    { "name": "skyeyes", "githubUser": "williamsharkey" }
+  ]
+}
