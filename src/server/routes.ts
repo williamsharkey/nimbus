@@ -266,7 +266,7 @@ async function proxyGitHubPages(req: any, res: any, manager: WorkerManager, port
   const liveUrl = worker.state.liveUrl;
   const isLocalDev = liveUrl.startsWith("http://localhost") || liveUrl.startsWith("http://127.0.0.1");
   const subPath = req.params[0] || "";
-  const targetUrl = liveUrl + subPath;
+  const targetUrl = liveUrl + (subPath && !liveUrl.endsWith("/") ? "/" : "") + subPath;
 
   try {
     const response = await fetch(targetUrl);
@@ -285,16 +285,10 @@ async function proxyGitHubPages(req: any, res: any, manager: WorkerManager, port
       }
 
       if (isLocalDev) {
-        // Local dev server (e.g. Vite): inject a <base> tag so all relative URLs
-        // resolve against the dev server directly.
-        const baseTag = `<base href="${liveUrl}">`;
-        if (html.includes("<head>")) {
-          html = html.replace("<head>", `<head>${baseTag}`);
-        } else {
-          html = baseTag + html;
-        }
+        // No <base> tag for local dev — all imports are rewritten to /live/ proxy paths
+        // and CSS/assets are also rewritten below, keeping everything same-origin.
 
-        // IMPORTANT: Inline <script type="module"> doesn't respect <base> tag!
+        // Rewrite inline module imports to go through nimbus proxy to avoid CORS issues
         // Rewrite inline module imports to go through nimbus proxy to avoid CORS issues
         // Match imports inside <script type="module"> tags
         html = html.replace(/(<script[^>]*type=["']module["'][^>]*>)([\s\S]*?)(<\/script>)/gi, (match, openTag, scriptContent, closeTag) => {
