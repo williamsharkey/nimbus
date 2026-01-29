@@ -5,7 +5,7 @@ import type { WsHub } from "./ws.js";
 import type { SkyeyesCommand } from "../workers/types.js";
 import { randomUUID } from "crypto";
 
-export function setupRoutes(app: Express, manager: WorkerManager, wsHub: WsHub): void {
+export function setupRoutes(app: Express, manager: WorkerManager, wsHub: WsHub, port: number = 7777): void {
   app.use(express.json());
 
   // --- Worker endpoints ---
@@ -114,11 +114,11 @@ export function setupRoutes(app: Express, manager: WorkerManager, wsHub: WsHub):
   // --- GitHub Pages proxy ---
 
   app.get("/live/:page/*", async (req, res) => {
-    await proxyGitHubPages(req, res, manager);
+    await proxyGitHubPages(req, res, manager, port);
   });
 
   app.get("/live/:page", async (req, res) => {
-    await proxyGitHubPages(req, res, manager);
+    await proxyGitHubPages(req, res, manager, port);
   });
 
   // --- Generic URL proxy for Shared TV ---
@@ -165,15 +165,17 @@ export function setupRoutes(app: Express, manager: WorkerManager, wsHub: WsHub):
   });
 }
 
-async function proxyGitHubPages(req: any, res: any, manager: WorkerManager): Promise<void> {
+async function proxyGitHubPages(req: any, res: any, manager: WorkerManager, port: number): Promise<void> {
   const { page } = req.params;
   const worker = manager.getWorker(page);
   if (!worker || !worker.state.liveUrl) {
     return res.status(404).send(`No live URL configured for ${page}`);
   }
 
+  const liveUrl = worker.state.liveUrl;
+  const isLocalDev = liveUrl.startsWith("http://localhost") || liveUrl.startsWith("http://127.0.0.1");
   const subPath = req.params[0] || "";
-  const targetUrl = worker.state.liveUrl + subPath;
+  const targetUrl = liveUrl + subPath;
 
   try {
     const response = await fetch(targetUrl);
@@ -182,53 +184,68 @@ async function proxyGitHubPages(req: any, res: any, manager: WorkerManager): Pro
     if (contentType.includes("text/html")) {
       let html = await response.text();
       // Inject skyeyes.js before </body>
-      const skyeyesScript = `<script src="/skyeyes.js" data-page="${page}"></script>`;
+      // Use absolute URL so it resolves against nimbus server, not the <base> tag
+      const skyeyesUrl = isLocalDev ? `http://localhost:${port}/skyeyes.js` : "/skyeyes.js";
+      const skyeyesScript = `<script src="${skyeyesUrl}" data-page="${page}"></script>`;
       if (html.includes("</body>")) {
         html = html.replace("</body>", `${skyeyesScript}\n</body>`);
       } else {
         html += skyeyesScript;
       }
-      // Rewrite relative and absolute URLs to go through proxy
-      // Match src/href attributes with relative or absolute paths (but not external URLs or already proxied)
-      html = html.replace(/(href|src)="(?!https?:\/\/|\/\/|\/live\/|\/skyeyes)([^"]*?)"/g, (match, attr, url) => {
-        // Remove leading slash if present to normalize
-        let cleanUrl = url.startsWith('/') ? url.substring(1) : url;
-        // If the URL starts with the page name (e.g., "shiro/assets/..."), strip that too
-        // This handles GitHub Pages URLs like "/shiro/assets/..." -> "assets/..."
-        if (cleanUrl.startsWith(`${page}/`)) {
-          cleanUrl = cleanUrl.substring(page.length + 1);
-        }
-        return `${attr}="/live/${page}/${cleanUrl}"`;
-      });
 
-      // Rewrite ES module imports (e.g., import VFS from './src/vfs.js')
-      html = html.replace(/from\s+['"](?!https?:\/\/|\/\/|\/live\/)([^'"]+)['"]/g, (match, url) => {
-        let cleanUrl = url.startsWith('/') ? url.substring(1) : url;
-        if (cleanUrl.startsWith(`${page}/`)) {
-          cleanUrl = cleanUrl.substring(page.length + 1);
+      if (isLocalDev) {
+        // Local dev server (e.g. Vite): inject a <base> tag so all relative URLs
+        // resolve against the dev server directly. Don't rewrite URLs — the dev
+        // server handles module transforms, HMR, etc.
+        const baseTag = `<base href="${liveUrl}">`;
+        if (html.includes("<head>")) {
+          html = html.replace("<head>", `<head>${baseTag}`);
+        } else {
+          html = baseTag + html;
         }
-        // Resolve relative paths (./foo.js) to absolute proxy paths
-        if (cleanUrl.startsWith('./')) {
-          cleanUrl = cleanUrl.substring(2);
-        }
-        return `from '/live/${page}/${cleanUrl}'`;
-      });
+      } else {
+        // GitHub Pages / static hosting: rewrite URLs to go through the proxy
+        // Match src/href attributes with relative or absolute paths (but not external URLs or already proxied)
+        html = html.replace(/(href|src)="(?!https?:\/\/|\/\/|\/live\/|\/skyeyes)([^"]*?)"/g, (match, attr, url) => {
+          // Remove leading slash if present to normalize
+          let cleanUrl = url.startsWith('/') ? url.substring(1) : url;
+          // If the URL starts with the page name (e.g., "shiro/assets/..."), strip that too
+          // This handles GitHub Pages URLs like "/shiro/assets/..." -> "assets/..."
+          if (cleanUrl.startsWith(`${page}/`)) {
+            cleanUrl = cleanUrl.substring(page.length + 1);
+          }
+          return `${attr}="/live/${page}/${cleanUrl}"`;
+        });
 
-      // Rewrite side-effect imports (e.g., import './src/devtools.js')
-      html = html.replace(/import\s+['"](?!https?:\/\/|\/\/|\/live\/)([^'"]+)['"]/g, (match, url) => {
-        let cleanUrl = url.startsWith('/') ? url.substring(1) : url;
-        if (cleanUrl.startsWith(`${page}/`)) {
-          cleanUrl = cleanUrl.substring(page.length + 1);
-        }
-        if (cleanUrl.startsWith('./')) {
-          cleanUrl = cleanUrl.substring(2);
-        }
-        return `import '/live/${page}/${cleanUrl}'`;
-      });
+        // Rewrite ES module imports (e.g., import VFS from './src/vfs.js')
+        html = html.replace(/from\s+['"](?!https?:\/\/|\/\/|\/live\/)([^'"]+)['"]/g, (match, url) => {
+          let cleanUrl = url.startsWith('/') ? url.substring(1) : url;
+          if (cleanUrl.startsWith(`${page}/`)) {
+            cleanUrl = cleanUrl.substring(page.length + 1);
+          }
+          // Resolve relative paths (./foo.js) to absolute proxy paths
+          if (cleanUrl.startsWith('./')) {
+            cleanUrl = cleanUrl.substring(2);
+          }
+          return `from '/live/${page}/${cleanUrl}'`;
+        });
+
+        // Rewrite side-effect imports (e.g., import './src/devtools.js')
+        html = html.replace(/import\s+['"](?!https?:\/\/|\/\/|\/live\/)([^'"]+)['"]/g, (match, url) => {
+          let cleanUrl = url.startsWith('/') ? url.substring(1) : url;
+          if (cleanUrl.startsWith(`${page}/`)) {
+            cleanUrl = cleanUrl.substring(page.length + 1);
+          }
+          if (cleanUrl.startsWith('./')) {
+            cleanUrl = cleanUrl.substring(2);
+          }
+          return `import '/live/${page}/${cleanUrl}'`;
+        });
+      }
 
       res.type("html").send(html);
-    } else if (contentType.includes("javascript") || contentType.includes("application/javascript") || targetUrl.endsWith('.js')) {
-      // Rewrite JavaScript module imports
+    } else if (!isLocalDev && (contentType.includes("javascript") || contentType.includes("application/javascript") || targetUrl.endsWith('.js'))) {
+      // Rewrite JavaScript module imports (only for static hosting, not local dev servers)
       let js = await response.text();
 
       // Helper function to resolve relative paths

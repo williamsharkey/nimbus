@@ -22,6 +22,7 @@ export class WorkerManager {
             this.broadcast({ type: "worker_log", workerId, entry });
           },
         },
+        config.port,
       );
       this.workers.set(repo.name, worker);
     }

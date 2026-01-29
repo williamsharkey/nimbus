@@ -1,5 +1,6 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { WorkerState, LogEntry, RepoConfig } from "./types.js";
+import { createSkyeyesMcpServer } from "../mcp/skyeyes-tools.js";
 
 export interface WorkerCallbacks {
   onStateChange: (worker: WorkerState) => void;
@@ -8,6 +9,16 @@ export interface WorkerCallbacks {
 
 interface PendingMessage {
   resolve: (value: any) => void;
+}
+
+// Shared MCP server instance — created once, reused by all workers
+let skyeyesMcp: ReturnType<typeof createSkyeyesMcpServer> | null = null;
+
+function getSkyeyesMcp(port: number) {
+  if (!skyeyesMcp) {
+    skyeyesMcp = createSkyeyesMcpServer(port);
+  }
+  return skyeyesMcp;
 }
 
 export class Worker {
@@ -21,6 +32,7 @@ export class Worker {
   private model: string;
   private shutdownRequested = false;
   private processing: Promise<void> | null = null;
+  private port: number;
 
   constructor(
     config: RepoConfig,
@@ -28,10 +40,12 @@ export class Worker {
     model: string,
     maxLogEntries: number,
     callbacks: WorkerCallbacks,
+    port: number = 7777,
   ) {
     this.model = model;
     this.maxLogEntries = maxLogEntries;
     this.callbacks = callbacks;
+    this.port = port;
     this.state = {
       id: config.name,
       repoName: config.name,
@@ -57,7 +71,7 @@ export class Worker {
 
     try {
       this.queryHandle = query({
-        prompt: `You are a worker agent for the "${this.state.repoName}" repository at ${this.state.repoPath}. You can use skyeyes to interact with live pages by running: curl -s -X POST http://localhost:7777/api/skyeyes/<page>/exec -H "Content-Type: application/json" -d '{"code":"<javascript>"}'. Await instructions.`,
+        prompt: `You are a worker agent for the "${this.state.repoName}" repository at ${this.state.repoPath}. You have skyeyes MCP tools for interacting with live browser pages. Use skyeyes_eval to execute JS, terminal_exec to run shell commands, terminal_read to see terminal output, terminal_status to check if the terminal is busy, skyeyes_reload to reload a page, and skyeyes_status to check bridge connections. Pages available: "shiro" and "foam". Await instructions.`,
         options: {
           cwd: this.state.repoPath,
           model: this.model,
@@ -65,6 +79,7 @@ export class Worker {
           allowDangerouslySkipPermissions: true,
           abortController: this.abortController,
           maxTurns: 50,
+          mcpServers: { skyeyes: getSkyeyesMcp(this.port) },
         },
       });
 
@@ -108,6 +123,7 @@ export class Worker {
         allowDangerouslySkipPermissions: true,
         abortController: this.abortController,
         maxTurns: 50,
+        mcpServers: { skyeyes: getSkyeyesMcp(this.port) },
       };
 
       if (this.state.sessionId) {

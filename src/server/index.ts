@@ -57,7 +57,7 @@ wsHub.onClientMessage((msg) => {
 });
 
 // REST API routes
-setupRoutes(app, manager, wsHub);
+setupRoutes(app, manager, wsHub, config.port);
 
 // Serve skyeyes.js from the skyeyes repo
 const skyeyesPath = path.resolve(config.basePath, "skyeyes");
