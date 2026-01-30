@@ -5,7 +5,7 @@
   "maxBudgetPerWorkerUsd": 5.0,
   "maxLogEntries": 500,
   "repos": [
-    { "name": "shiro", "githubUser": "williamsharkey", "liveUrl": "http://localhost:5173" },
+    { "name": "shiro", "githubUser": "williamsharkey", "liveUrl": "http://localhost:5173/shiro/" },
     { "name": "foam", "githubUser": "williamsharkey", "liveUrl": "http://localhost:5175" },
     { "name": "windwalker", "githubUser": "williamsharkey" },
     { "name": "spirit", "githubUser": "williamsharkey" },

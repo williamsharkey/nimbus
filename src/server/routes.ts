@@ -267,7 +267,6 @@ async function proxyGitHubPages(req: any, res: any, manager: WorkerManager, port
   const isLocalDev = liveUrl.startsWith("http://localhost") || liveUrl.startsWith("http://127.0.0.1");
   const subPath = req.params[0] || "";
   const targetUrl = liveUrl + (subPath && !liveUrl.endsWith("/") ? "/" : "") + subPath;
-
   try {
     const response = await fetch(targetUrl);
     const contentType = response.headers.get("content-type") || "";
@@ -304,6 +303,15 @@ async function proxyGitHubPages(req: any, res: any, manager: WorkerManager, port
             return `import '/live/${rawPage}/${cleanUrl}'`;
           });
           return openTag + rewritten + closeTag;
+        });
+
+        // Rewrite href/src attributes to go through the proxy (since no <base> tag)
+        html = html.replace(/(href|src)="(?!https?:\/\/|\/\/|\/live\/|\/skyeyes|data:)([^"]*?)"/g, (match, attr, url) => {
+          let cleanUrl = url.startsWith('/') ? url.substring(1) : url;
+          if (cleanUrl.startsWith(`${basePage}/`)) {
+            cleanUrl = cleanUrl.substring(basePage.length + 1);
+          }
+          return `${attr}="/live/${rawPage}/${cleanUrl}"`;
         });
       } else {
         // GitHub Pages / static hosting: rewrite URLs to go through the proxy
