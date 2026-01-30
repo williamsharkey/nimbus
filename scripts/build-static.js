@@ -135,8 +135,8 @@ async function boot() {
 
   // Boot message
   terminal.write('\\x1b[36m╔═══════════════════════════════════════════════╗\\x1b[0m\\n');
-  terminal.write('\\x1b[36m║\\x1b[0m   \\x1b[1;97mFoam OS\\x1b[0m \\x1b[95mv0.1.0\\x1b[0m (Standalone)              \\x1b[36m║\\x1b[0m\\n');
-  terminal.write('\\x1b[36m║\\x1b[0m   \\x1b[92mBrowser-Native Virtual OS\\x1b[0m                 \\x1b[36m║\\x1b[0m\\n');
+  terminal.write('\\x1b[36m║\\x1b[0m   \\x1b[1;97mFoam OS\\x1b[0m \\x1b[95mv0.1.0\\x1b[0m (Standalone)                 \\x1b[36m║\\x1b[0m\\n');
+  terminal.write('\\x1b[36m║\\x1b[0m   \\x1b[92mBrowser-Native Virtual OS\\x1b[0m                   \\x1b[36m║\\x1b[0m\\n');
   terminal.write('\\x1b[36m║\\x1b[0m                                               \\x1b[36m║\\x1b[0m\\n');
   terminal.write('\\x1b[36m║\\x1b[0m   \\x1b[33mhelp\\x1b[0m        — list all commands             \\x1b[36m║\\x1b[0m\\n');
   terminal.write('\\x1b[36m║\\x1b[0m   \\x1b[33mupload\\x1b[0m      — upload files from host        \\x1b[36m║\\x1b[0m\\n');
