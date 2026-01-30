@@ -72,6 +72,62 @@ function terminalStatusCode(): string {
 })()`;
 }
 
+// ─── HYPERCOMPACT (Token-efficient DOM navigation) ────────────────────────────
+
+function hcOpenCode(filePath: string): string {
+  const escaped = JSON.stringify(filePath);
+  return `return (async () => {
+  const path = ${escaped};
+  if (!window.__hc) return JSON.stringify({ error: 'HC not loaded' });
+
+  let html;
+  if (window.__shiro) {
+    const resolved = window.__shiro.fs.resolvePath(path, window.__shiro.shell.cwd);
+    html = await window.__shiro.fs.readFile(resolved);
+  } else if (window.__foam) {
+    html = await window.__foam.vfs.readFile(path);
+  } else {
+    return JSON.stringify({ error: 'No OS detected' });
+  }
+
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(html, 'text/html');
+  window.__hc.session = new window.__hc.HCSession(doc, path);
+  return JSON.stringify({ ok: true, path, chars: html.length });
+})()`;
+}
+
+function hcExecCode(cmd: string): string {
+  const escaped = JSON.stringify(cmd);
+  return `return (() => {
+  if (!window.__hc || !window.__hc.session) return '✗ no session (use hc_open first)';
+  return window.__hc.session.exec(${escaped});
+})()`;
+}
+
+function hcLiveCode(): string {
+  return `return (() => {
+  if (!window.__hc) return JSON.stringify({ error: 'HC not loaded' });
+  window.__hc.session = new window.__hc.HCSession(document, 'live');
+  return JSON.stringify({ ok: true, mode: 'live' });
+})()`;
+}
+
+function hcStatusCode(): string {
+  return `return (() => {
+  if (!window.__hc) return JSON.stringify({ loaded: false });
+  if (!window.__hc.session) return JSON.stringify({ loaded: true, session: false });
+  return JSON.stringify({
+    loaded: true,
+    session: true,
+    source: window.__hc.session.source,
+    current: window.__hc.session.current?.tagName?.toLowerCase() || 'none',
+    resultsCount: window.__hc.session.lastResults?.length || 0,
+    varsCount: Object.keys(window.__hc.session.vars || {}).length
+  });
+})()`;
+}
+
 async function evalViaHttp(port: number, page: string, code: string): Promise<{ result: unknown; error: string | null }> {
   const resp = await fetch(`http://localhost:${port}/api/skyeyes/${page}/exec`, {
     method: "POST",
@@ -186,6 +242,102 @@ export function createSkyeyesMcpServer(port: number) {
         },
         async (args) => {
           const code = terminalStatusCode();
+          const { result, error } = await evalViaHttp(port, args.page, code);
+          if (error) return errorResult(error);
+          return textResult(String(result));
+        },
+      ),
+
+      // ─── HYPERCOMPACT TOOLS ─────────────────────────────────────────────────────
+      // Token-efficient DOM navigation for LLM agents
+
+      tool(
+        "hc_open",
+        "Open an HTML file for Hypercompact navigation. Loads the file from the browser OS filesystem and parses it into a detached DOM for querying. Use this before running hc_exec commands.",
+        {
+          page: z.string().describe("Page identifier (e.g., 'foam', 'shiro', 'foam-worker1')"),
+          file: z.string().describe("Path to HTML file in the browser OS filesystem (e.g., '/home/user/page.html')"),
+        },
+        async (args) => {
+          const code = hcOpenCode(args.file);
+          const { result, error } = await evalViaHttp(port, args.page, code);
+          if (error) return errorResult(error);
+          try {
+            const parsed = JSON.parse(String(result));
+            if (parsed.error) return errorResult(parsed.error);
+            return textResult(`✓ opened ${parsed.path} (${parsed.chars} chars)`);
+          } catch {
+            return textResult(String(result));
+          }
+        },
+      ),
+
+      tool(
+        "hc_live",
+        "Attach Hypercompact to the live page DOM. Allows navigating the actual browser page (use with caution - can affect the UI). Use hc_open for safer file-based navigation.",
+        {
+          page: z.string().describe("Page identifier (e.g., 'foam', 'shiro')"),
+        },
+        async (args) => {
+          const code = hcLiveCode();
+          const { result, error } = await evalViaHttp(port, args.page, code);
+          if (error) return errorResult(error);
+          try {
+            const parsed = JSON.parse(String(result));
+            if (parsed.error) return errorResult(parsed.error);
+            return textResult(`✓ attached to live DOM`);
+          } catch {
+            return textResult(String(result));
+          }
+        },
+      ),
+
+      tool(
+        "hc_exec",
+        `Execute a Hypercompact command on the currently opened page. Returns terse output optimized for token efficiency.
+
+Commands:
+  s              State: "p:file c:N d:N @tag"
+  t, t100        Text content (optional char limit)
+  q <selector>   Query all matching elements → [0]text [1]text...
+  q1 <selector>  Query one, set as current
+  n<N>           Select Nth from results → ✓ [N] text...
+  up, up<N>      Go to parent element
+  ch             Show children
+  g <pattern>    Grep for text → L23: matching line...
+  look           List interactive elements → @0 <a> "Home"...
+  @<N>           Click Nth element
+  a              Show attributes
+  h, h<N>        Show HTML (optional limit)
+  >$name         Store to variable
+  $name          Recall variable
+
+Example workflow:
+  hc_open file="page.html" → ✓ opened
+  hc_exec cmd="t100" → first 100 chars of text
+  hc_exec cmd="q .price" → [0]$29.99 [1]$49.99
+  hc_exec cmd="n0" → ✓ [0] $29.99
+  hc_exec cmd="a" → class=price data-sku=ABC`,
+        {
+          page: z.string().describe("Page identifier (e.g., 'foam', 'shiro')"),
+          cmd: z.string().describe("Hypercompact command (e.g., 't100', 'q .price', 'n0', 'a')"),
+        },
+        async (args) => {
+          const code = hcExecCode(args.cmd);
+          const { result, error } = await evalViaHttp(port, args.page, code);
+          if (error) return errorResult(error);
+          return textResult(String(result));
+        },
+      ),
+
+      tool(
+        "hc_status",
+        "Check Hypercompact session status: whether HC is loaded, if a session is active, the source file, current element, and cached results count.",
+        {
+          page: z.string().describe("Page identifier (e.g., 'foam', 'shiro')"),
+        },
+        async (args) => {
+          const code = hcStatusCode();
           const { result, error } = await evalViaHttp(port, args.page, code);
           if (error) return errorResult(error);
           return textResult(String(result));
