@@ -353,6 +353,8 @@ async function proxyGitHubPages(req: any, res: any, manager: WorkerManager, port
         });
       }
 
+      // Prevent caching to ensure skyeyes is always injected fresh on reload
+      res.set("Cache-Control", "no-store, no-cache, must-revalidate");
       res.type("html").send(html);
     } else if (contentType.includes("javascript") || contentType.includes("application/javascript") || targetUrl.endsWith('.js')) {
       // Rewrite JavaScript module imports to go through nimbus proxy
