@@ -14,6 +14,24 @@ export function setupWebSocket(wss: WebSocketServer): WsHub {
   const skyeyesBridges = new Map<string, WebSocket>(); // page -> ws
   const clientMessageHandlers: Array<(msg: WsClientMessage) => void> = [];
   const pendingEvals = new Map<string, { resolve: (v: any) => void; reject: (e: any) => void }>();
+  const aliveBridges = new WeakSet<WebSocket>();
+
+  // Server-side heartbeat: detect dead bridge connections every 15s
+  const BRIDGE_PING_INTERVAL = 15_000;
+  const bridgePingTimer = setInterval(() => {
+    for (const [page, bridgeWs] of skyeyesBridges) {
+      if (!aliveBridges.has(bridgeWs)) {
+        // No pong received since last ping — connection is dead
+        console.log(`Skyeyes bridge dead (no pong): ${page}`);
+        skyeyesBridges.delete(page);
+        bridgeWs.terminate();
+        continue;
+      }
+      aliveBridges.delete(bridgeWs);
+      bridgeWs.ping();
+    }
+  }, BRIDGE_PING_INTERVAL);
+  bridgePingTimer.unref(); // Don't keep process alive for this timer
 
   wss.on("connection", (ws, req) => {
     const url = new URL(req.url || "/", "http://localhost");
@@ -21,8 +39,21 @@ export function setupWebSocket(wss: WebSocketServer): WsHub {
     if (url.pathname === "/skyeyes") {
       // Skyeyes bridge connection from an iframe
       const page = url.searchParams.get("page") || "unknown";
+
+      // Close stale connection for this page (e.g. after iframe reload)
+      const oldWs = skyeyesBridges.get(page);
+      if (oldWs && oldWs !== ws) {
+        console.log(`Skyeyes bridge replacing stale connection: ${page}`);
+        oldWs.close(4000, "replaced");
+      }
+
       console.log(`Skyeyes bridge connected: ${page}`);
       skyeyesBridges.set(page, ws);
+      aliveBridges.add(ws); // Mark alive on connect
+
+      ws.on("pong", () => {
+        aliveBridges.add(ws);
+      });
 
       ws.on("message", (raw) => {
         try {
@@ -49,6 +80,9 @@ export function setupWebSocket(wss: WebSocketServer): WsHub {
               level: msg.level,
               args: msg.args,
             });
+          } else if (msg.type === "ping") {
+            // Respond to client-side heartbeat pings
+            ws.send(JSON.stringify({ type: "pong" }));
           }
         } catch {}
       });

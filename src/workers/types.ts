@@ -7,17 +7,15 @@ export interface WorkerState {
   githubUrl: string;
   liveUrl?: string;
   status: WorkerStatus;
-  sessionId: string | null;
+  tmuxSession: string;
   currentTask: string | null;
   lastError: string | null;
   outputLog: LogEntry[];
-  costUsd: number;
-  turnsCompleted: number;
 }
 
 export interface LogEntry {
   timestamp: number;
-  type: "assistant" | "tool" | "system" | "error" | "result" | "user";
+  type: "assistant" | "tool" | "system" | "error" | "result" | "user" | "output";
   content: string;
   toolName?: string;
 }
@@ -54,7 +52,8 @@ export type WsClientMessage =
 export type SkyeyesBridgeMessage =
   | { type: "skyeyes_ready"; page: string }
   | { type: "skyeyes_result"; id: string; result: unknown; error: string | null }
-  | { type: "skyeyes_console"; level: string; args: unknown[] };
+  | { type: "skyeyes_console"; level: string; args: unknown[] }
+  | { type: "ping"; page: string; timestamp: number };
 
 // WebSocket messages server → skyeyes bridge
 export type SkyeyesCommand =
