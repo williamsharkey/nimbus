@@ -1,38 +1,57 @@
-import { query } from "@anthropic-ai/claude-agent-sdk";
+import { execSync } from "child_process";
+import { writeFileSync } from "fs";
+import path from "path";
+import pkg from "@xterm/headless";
+const { Terminal } = pkg;
 import type { WorkerState, LogEntry, RepoConfig } from "./types.js";
-import { createSkyeyesMcpServer } from "../mcp/skyeyes-tools.js";
 
 export interface WorkerCallbacks {
   onStateChange: (worker: WorkerState) => void;
   onLogEntry: (workerId: string, entry: LogEntry) => void;
 }
 
-interface PendingMessage {
-  resolve: (value: any) => void;
+const CLAUDE_BIN = process.env.CLAUDE_BIN || "claude";
+const MCP_CONFIG = path.resolve(
+  process.env.MCP_CONFIG || path.join(import.meta.dirname, "../../skyeyes-mcp.json")
+);
+const POLL_INTERVAL_MS = 1500;
+const CAPTURE_LINES = 200;
+
+function execSafe(cmd: string): string {
+  try {
+    return execSync(cmd, { maxBuffer: 1024 * 1024, timeout: 5000 }).toString();
+  } catch {
+    return "";
+  }
 }
 
-// Shared MCP server instance — created once, reused by all workers
-let skyeyesMcp: ReturnType<typeof createSkyeyesMcpServer> | null = null;
+type TerminalInstance = InstanceType<typeof Terminal>;
 
-function getSkyeyesMcp(port: number) {
-  if (!skyeyesMcp) {
-    skyeyesMcp = createSkyeyesMcpServer(port);
+// Read the visible text from a headless xterm Terminal buffer
+function readTerminalBuffer(term: TerminalInstance): string {
+  const buf = term.buffer.active;
+  const lines: string[] = [];
+  for (let y = 0; y < term.rows; y++) {
+    const line = buf.getLine(y);
+    if (!line) { lines.push(""); continue; }
+    let text = "";
+    for (let x = 0; x < line.length; x++) {
+      const cell = line.getCell(x);
+      text += cell ? (cell.getChars() || " ") : " ";
+    }
+    lines.push(text.trimEnd());
   }
-  return skyeyesMcp;
+  return lines.join("\n");
 }
 
 export class Worker {
   public state: WorkerState;
-  private queryHandle: any = null;
-  private abortController: AbortController | null = null;
-  private messageQueue: PendingMessage[] = [];
-  private pendingMessages: any[] = [];
   private callbacks: WorkerCallbacks;
   private maxLogEntries: number;
   private model: string;
-  private shutdownRequested = false;
-  private processing: Promise<void> | null = null;
-  private port: number;
+  private pollTimer: ReturnType<typeof setInterval> | null = null;
+  private terminal: TerminalInstance;
+  private lastScreenText = "";
 
   constructor(
     config: RepoConfig,
@@ -40,12 +59,17 @@ export class Worker {
     model: string,
     maxLogEntries: number,
     callbacks: WorkerCallbacks,
-    port: number = 7777,
+    _port: number = 7777,
   ) {
     this.model = model;
     this.maxLogEntries = maxLogEntries;
     this.callbacks = callbacks;
-    this.port = port;
+    this.terminal = new Terminal({
+      rows: 50,
+      cols: 200,
+      scrollback: 0,
+      allowProposedApi: true,
+    });
     this.state = {
       id: config.name,
       repoName: config.name,
@@ -53,37 +77,63 @@ export class Worker {
       githubUrl: `https://github.com/${config.githubUser}/${config.name}`,
       liveUrl: config.liveUrl,
       status: "idle",
-      sessionId: null,
+      tmuxSession: `nimbus-${config.name}`,
       currentTask: null,
       lastError: null,
       outputLog: [],
-      costUsd: 0,
-      turnsCompleted: 0,
     };
   }
 
   async start(): Promise<void> {
-    this.abortController = new AbortController();
-    this.shutdownRequested = false;
     this.state.status = "starting";
     this.state.lastError = null;
     this.emitStateChange();
 
+    const session = this.state.tmuxSession;
+    const repoPath = this.state.repoPath;
+
     try {
-      this.queryHandle = query({
-        prompt: `You are a worker agent for the "${this.state.repoName}" repository at ${this.state.repoPath}. You have skyeyes MCP tools (prefixed with mcp__skyeyes__) for interacting with live browser pages. Available tools: mcp__skyeyes__skyeyes_eval, mcp__skyeyes__terminal_exec, mcp__skyeyes__terminal_read, mcp__skyeyes__terminal_status, mcp__skyeyes__skyeyes_reload, mcp__skyeyes__skyeyes_status. Your dedicated page IDs are: "shiro-${this.state.id}" (your shiro iframe) and "foam-${this.state.id}" (your foam iframe). Always use these page IDs — they are your isolated browser contexts that no other worker shares. Await instructions.`,
-        options: {
-          cwd: this.state.repoPath,
-          model: this.model,
-          permissionMode: "bypassPermissions",
-          allowDangerouslySkipPermissions: true,
-          abortController: this.abortController,
-          maxTurns: 50,
-          mcpServers: { skyeyes: getSkyeyesMcp(this.port) },
-        },
+      // Kill any existing session
+      execSafe(`tmux kill-session -t ${session} 2>/dev/null`);
+      await sleep(200);
+
+      // Create new detached tmux session in the repo directory
+      // -x 200 -y 50 gives a wide pane for clean output
+      execSync(
+        `tmux new-session -d -s ${session} -c ${shellEscape(repoPath)} -x 200 -y 50`,
+        { timeout: 5000 },
+      );
+
+      // Launch claude CLI inside the tmux session
+      const claudeCmd = [
+        CLAUDE_BIN,
+        "--model", this.model,
+        "--dangerously-skip-permissions",
+        "--mcp-config", MCP_CONFIG,
+      ].join(" ");
+
+      execSync(`tmux send-keys -t ${session} ${shellEscape(claudeCmd)} Enter`, {
+        timeout: 5000,
       });
 
-      this.processing = this.processMessages();
+      this.addLog("system", `Started tmux session "${session}" in ${repoPath}`);
+      this.addLog("system", `Launching: ${claudeCmd}`);
+
+      // Start polling for output
+      this.startPolling();
+
+      // Wait a moment then check if the session is alive
+      await sleep(2000);
+      const alive = this.isSessionAlive();
+      if (alive) {
+        this.state.status = "working"; // Claude CLI is starting up
+        this.addLog("system", "Claude Code CLI starting...");
+      } else {
+        this.state.status = "error";
+        this.state.lastError = "tmux session died immediately";
+        this.addLog("error", "tmux session died immediately after start");
+      }
+      this.emitStateChange();
     } catch (err) {
       this.state.status = "error";
       this.state.lastError = String(err);
@@ -96,133 +146,175 @@ export class Worker {
     this.state.currentTask = text.substring(0, 120);
     this.addLog("user", text);
 
-    // For now, each sendMessage starts a new query since streaming input
-    // requires the unstable v2 API. We resume the session to keep context.
-    this.startNewQuery(text);
-  }
-
-  private async startNewQuery(prompt: string): Promise<void> {
-    // Abort the previous query and wait for its processMessages loop to finish
-    if (this.abortController) {
-      this.abortController.abort();
-    }
-    if (this.processing) {
-      await this.processing.catch(() => {});
-      this.processing = null;
-    }
-
-    this.abortController = new AbortController();
-    this.state.status = "working";
-    this.emitStateChange();
+    const session = this.state.tmuxSession;
 
     try {
-      const opts: any = {
-        cwd: this.state.repoPath,
-        model: this.model,
-        permissionMode: "bypassPermissions",
-        allowDangerouslySkipPermissions: true,
-        abortController: this.abortController,
-        maxTurns: 50,
-        mcpServers: { skyeyes: getSkyeyesMcp(this.port) },
-      };
-
-      if (this.state.sessionId) {
-        opts.resume = this.state.sessionId;
+      // For multiline or special characters, use tmux load-buffer + paste
+      // For simple single-line messages, use send-keys -l (literal)
+      if (text.includes("\n") || text.length > 500) {
+        // Write to a temp file and use tmux load-buffer + paste-buffer
+        const tmpFile = `/tmp/nimbus-msg-${this.state.id}.txt`;
+        writeFileSync(tmpFile, text);
+        execSync(`tmux load-buffer ${tmpFile}`, { timeout: 5000 });
+        execSync(`tmux paste-buffer -t ${session}`, { timeout: 5000 });
+        execSync(`tmux send-keys -t ${session} Enter`, { timeout: 5000 });
+      } else {
+        // Simple single-line: send literally then Enter
+        execSync(`tmux send-keys -t ${session} -l ${shellEscape(text)}`, {
+          timeout: 5000,
+        });
+        execSync(`tmux send-keys -t ${session} Enter`, { timeout: 5000 });
       }
 
-      this.queryHandle = query({ prompt, options: opts });
-      this.processing = this.processMessages();
-      await this.processing;
+      this.state.status = "working";
+      this.emitStateChange();
     } catch (err) {
-      this.state.status = "error";
+      this.addLog("error", `Failed to send message: ${err}`);
       this.state.lastError = String(err);
-      this.addLog("error", String(err));
       this.emitStateChange();
-    }
-  }
-
-  private async processMessages(): Promise<void> {
-    if (!this.queryHandle) return;
-    try {
-      for await (const message of this.queryHandle) {
-        this.handleMessage(message);
-      }
-      // Query finished naturally
-      if (this.state.status === "working" || this.state.status === "starting") {
-        this.state.status = "idle";
-        this.state.currentTask = null;
-        this.emitStateChange();
-      }
-    } catch (err: any) {
-      if (err?.name === "AbortError" || this.shutdownRequested) {
-        return;
-      }
-      this.state.status = "error";
-      this.state.lastError = String(err);
-      this.addLog("error", String(err));
-      this.emitStateChange();
-    }
-  }
-
-  private handleMessage(message: any): void {
-    switch (message.type) {
-      case "system":
-        if (message.subtype === "init" && message.session_id) {
-          this.state.sessionId = message.session_id;
-          if (this.state.status === "starting") {
-            this.state.status = "idle";
-            this.emitStateChange();
-          }
-        }
-        break;
-
-      case "assistant": {
-        const content = message.message?.content;
-        if (!Array.isArray(content)) break;
-        for (const block of content) {
-          if (block.type === "text" && block.text) {
-            this.addLog("assistant", block.text);
-          } else if (block.type === "tool_use") {
-            const input = JSON.stringify(block.input ?? {}).substring(0, 300);
-            this.addLog("tool", `${block.name}: ${input}`, block.name);
-          }
-        }
-        break;
-      }
-
-      case "result": {
-        this.state.status = "idle";
-        this.state.currentTask = null;
-        if (message.subtype === "success") {
-          if (message.total_cost_usd) this.state.costUsd += message.total_cost_usd;
-          if (message.num_turns) this.state.turnsCompleted += message.num_turns;
-          if (message.result) this.addLog("result", message.result);
-        } else if (message.subtype === "error_max_turns") {
-          this.addLog("system", `Reached max turns (${message.num_turns || "?"})`);
-          if (message.total_cost_usd) this.state.costUsd += message.total_cost_usd;
-          if (message.num_turns) this.state.turnsCompleted += message.num_turns;
-        } else {
-          const errMsg = message.error || message.subtype || "Unknown error";
-          this.state.lastError = errMsg;
-          this.addLog("error", errMsg);
-        }
-        this.emitStateChange();
-        break;
-      }
     }
   }
 
   async interrupt(): Promise<void> {
-    this.abortController?.abort();
-    this.state.status = "interrupted";
-    this.state.currentTask = null;
-    this.addLog("system", "Interrupted by user");
-    this.emitStateChange();
+    const session = this.state.tmuxSession;
+    try {
+      // Send Escape key — Claude Code's interrupt
+      execSync(`tmux send-keys -t ${session} Escape`, { timeout: 5000 });
+      this.state.status = "interrupted";
+      this.state.currentTask = null;
+      this.addLog("system", "Interrupted (sent Escape)");
+      this.emitStateChange();
+    } catch (err) {
+      this.addLog("error", `Failed to interrupt: ${err}`);
+    }
   }
 
   async shutdown(): Promise<void> {
-    this.shutdownRequested = true;
-    this.abortController?.abort();
+    this.stopPolling();
+    const session = this.state.tmuxSession;
+    try {
+      execSafe(`tmux kill-session -t ${session} 2>/dev/null`);
+      this.addLog("system", "tmux session killed");
+    } catch {}
+  }
+
+  private startPolling(): void {
+    this.stopPolling();
+    this.pollTimer = setInterval(() => {
+      this.captureOutput();
+    }, POLL_INTERVAL_MS);
+  }
+
+  private stopPolling(): void {
+    if (this.pollTimer) {
+      clearInterval(this.pollTimer);
+      this.pollTimer = null;
+    }
+  }
+
+  private async captureOutput(): Promise<void> {
+    const session = this.state.tmuxSession;
+
+    try {
+      const raw = execSafe(
+        `tmux capture-pane -t ${session} -p -S -${CAPTURE_LINES}`
+      );
+
+      if (!raw) {
+        if (!this.isSessionAlive()) {
+          this.state.status = "error";
+          this.state.lastError = "tmux session ended";
+          this.stopPolling();
+          this.addLog("system", "tmux session ended");
+          this.emitStateChange();
+        }
+        return;
+      }
+
+      // Feed raw output through headless xterm to properly interpret all escape sequences
+      // write() is async — wait for callback before reading buffer
+      this.terminal.reset();
+      await new Promise<void>((resolve) => {
+        this.terminal.write(raw, resolve);
+      });
+
+      // Read the rendered screen buffer as clean text
+      const screenText = readTerminalBuffer(this.terminal);
+
+      // Only emit if content changed
+      if (screenText === this.lastScreenText) return;
+
+      // Diff to find new content
+      let newContent = "";
+      if (this.lastScreenText === "") {
+        newContent = screenText.split("\n").filter((l) => l.trim()).join("\n");
+      } else {
+        const oldJoined = this.lastScreenText.split("\n").filter((l) => l.trim()).join("\n");
+        const newJoined = screenText.split("\n").filter((l) => l.trim()).join("\n");
+
+        if (newJoined.startsWith(oldJoined)) {
+          newContent = newJoined.slice(oldJoined.length).trim();
+        } else {
+          newContent = newJoined;
+        }
+      }
+
+      this.lastScreenText = screenText;
+
+      if (newContent) {
+        this.addLog("output", newContent);
+      }
+
+      this.detectStatus(screenText);
+    } catch {
+      // Capture failed silently
+    }
+  }
+
+  private detectStatus(cleanOutput: string): void {
+    const lines = cleanOutput.split("\n").filter((l) => l.trim());
+    if (lines.length === 0) return;
+
+    // Claude Code's TUI has the ❯ prompt on a line near the bottom,
+    // with a status bar ("bypass permissions", tool names) below it.
+    // Check the last 10 lines for the idle prompt.
+    const tail = lines.slice(-10);
+    const hasPrompt = tail.some((line) => {
+      const trimmed = line.trim();
+      // Match ❯ prompt line (idle input) or placeholder hint
+      return trimmed.includes("❯") || trimmed.match(/^>\s*$/);
+    });
+
+    // Detect working: status bar shows tool names like "Read", "Bash", "Edit", etc.
+    const hasToolActivity = tail.some((line) => {
+      const trimmed = line.trim();
+      return /\b(Read|Bash|Edit|Write|Grep|Glob|Task)\b/.test(trimmed)
+        && !trimmed.includes("Try ");
+    });
+
+    if (hasPrompt && !hasToolActivity) {
+      if (this.state.status !== "idle" && this.state.status !== "interrupted") {
+        this.state.status = "idle";
+        this.state.currentTask = null;
+        this.emitStateChange();
+      }
+    } else if (hasToolActivity && this.state.status === "idle") {
+      this.state.status = "working";
+      this.emitStateChange();
+    }
+  }
+
+  private isSessionAlive(): boolean {
+    const result = execSafe(`tmux has-session -t ${this.state.tmuxSession} 2>&1`);
+    // tmux has-session returns empty string on success, error message on failure
+    return !result.includes("no ");
+  }
+
+  resize(cols: number, rows: number): void {
+    const session = this.state.tmuxSession;
+    execSafe(`tmux resize-window -t ${session} -x ${cols} -y ${rows}`);
+    this.terminal.resize(cols, rows);
+    this.addLog("system", `Resized to ${cols}x${rows}`);
   }
 
   private addLog(type: LogEntry["type"], content: string, toolName?: string): void {
@@ -237,4 +329,13 @@ export class Worker {
   private emitStateChange(): void {
     this.callbacks.onStateChange({ ...this.state });
   }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+function shellEscape(str: string): string {
+  // Wrap in single quotes, escaping any existing single quotes
+  return "'" + str.replace(/'/g, "'\\''") + "'";
 }

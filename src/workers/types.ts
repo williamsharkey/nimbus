@@ -46,7 +46,8 @@ export type WsClientMessage =
   | { type: "send_to_worker"; workerId: string; message: string }
   | { type: "interrupt_worker"; workerId: string }
   | { type: "restart_worker"; workerId: string }
-  | { type: "skyeyes_exec"; page: string; code: string; id: string };
+  | { type: "skyeyes_exec"; page: string; code: string; id: string }
+  | { type: "resize"; cols: number; rows: number };
 
 // WebSocket messages skyeyes bridge → server
 export type SkyeyesBridgeMessage =

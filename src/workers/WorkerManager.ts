@@ -73,6 +73,12 @@ export class WorkerManager {
     return true;
   }
 
+  resizeAll(cols: number, rows: number): void {
+    for (const worker of this.workers.values()) {
+      worker.resize(cols, rows);
+    }
+  }
+
   async shutdownAll(): Promise<void> {
     const promises = Array.from(this.workers.values()).map((w) => w.shutdown());
     await Promise.allSettled(promises);

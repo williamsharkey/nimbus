@@ -53,6 +53,9 @@ wsHub.onClientMessage((msg) => {
       wsHub.sendToSkyeyes(msg.page, { type: "eval", id, code: msg.code });
       break;
     }
+    case "resize":
+      manager.resizeAll(msg.cols, msg.rows);
+      break;
   }
 });
 
